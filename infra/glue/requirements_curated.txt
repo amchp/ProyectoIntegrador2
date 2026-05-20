@@ -1,0 +1,2 @@
+# This job runs inside the private VPC through a Glue JDBC connection.
+# Keep this empty unless the subnet has NAT or a private package index.

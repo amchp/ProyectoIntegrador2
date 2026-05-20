@@ -1,0 +1,154 @@
+{
+  "Comment": "Financial sentiment raw to curated to daily feature snapshot pipeline",
+  "StartAt": "Raw LWRF42 Dataset",
+  "States": {
+    "Raw LWRF42 Dataset": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Arguments": {
+        "JobName": "glue_financial_sentiment_raw",
+        "Arguments": {
+          "--dataset_key": "lwrf42_financial_sentiment_dataset",
+          "--raw_bucket": "proyecto-integrador-2",
+          "--raw_prefix": "raw/financial_sentiment"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Glue.ConcurrentRunsExceededException"
+          ],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 10,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "Next": "Raw Kenpache Dataset"
+    },
+    "Raw Kenpache Dataset": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Arguments": {
+        "JobName": "glue_financial_sentiment_raw",
+        "Arguments": {
+          "--dataset_key": "kenpache_multilingual_financial_sentiment",
+          "--raw_bucket": "proyecto-integrador-2",
+          "--raw_prefix": "raw/financial_sentiment"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Glue.ConcurrentRunsExceededException"
+          ],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 10,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "Next": "Raw Maguid Dataset"
+    },
+    "Raw Maguid Dataset": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Arguments": {
+        "JobName": "glue_financial_sentiment_raw",
+        "Arguments": {
+          "--dataset_key": "maguid28_combined_financial_phrasebank_twitter_news_sentiment",
+          "--raw_bucket": "proyecto-integrador-2",
+          "--raw_prefix": "raw/financial_sentiment"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Glue.ConcurrentRunsExceededException"
+          ],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 10,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "Next": "Raw Kaggle Dataset"
+    },
+    "Raw Kaggle Dataset": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Arguments": {
+        "JobName": "glue_financial_sentiment_raw",
+        "Arguments": {
+          "--dataset_key": "sbhatti_financial_sentiment_analysis",
+          "--raw_bucket": "proyecto-integrador-2",
+          "--raw_prefix": "raw/financial_sentiment"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Glue.ConcurrentRunsExceededException"
+          ],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 10,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "Next": "Curated Combined Financial Sentiment"
+    },
+    "Curated Combined Financial Sentiment": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Arguments": {
+        "JobName": "glue_financial_sentiment_curated",
+        "Arguments": {
+          "--connection_name": "Proyecto Financial Sentiment RDS connection",
+          "--raw_bucket": "proyecto-integrador-2",
+          "--raw_prefix": "raw/financial_sentiment",
+          "--target_table": "public.financial_sentiment_combined"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Glue.ConcurrentRunsExceededException"
+          ],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 10,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "Next": "Daily Feature Snapshot"
+    },
+    "Daily Feature Snapshot": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Arguments": {
+        "JobName": "glue_financial_sentiment_features",
+        "Arguments": {
+          "--connection_name": "Proyecto Financial Sentiment RDS connection",
+          "--source_table": "public.financial_sentiment_combined",
+          "--features_bucket": "proyecto-integrador-2-features-amce",
+          "--features_prefix": "features/financial_sentiment",
+          "--snapshot_date": "{% $states.input.snapshot_date %}"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Glue.ConcurrentRunsExceededException"
+          ],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 10,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Output": "{% $states.input %}",
+      "End": true
+    }
+  },
+  "QueryLanguage": "JSONata"
+}

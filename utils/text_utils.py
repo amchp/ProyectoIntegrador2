@@ -23,7 +23,7 @@ ID_TO_LABEL = {value: key for key, value in LABEL_TO_ID.items()}
 def find_project_root(start: Path | None = None) -> Path:
     start = (start or Path.cwd()).resolve()
     for candidate in [start, *start.parents]:
-        if (candidate / "requirements.txt").exists():
+        if (candidate / ".git").exists() or (candidate / "notebooks" / "requirements.txt").exists():
             return candidate
     return start
 
@@ -125,6 +125,27 @@ def metrics_table(metrics: dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def plot_confusion_matrix(matrix: pd.DataFrame, title: str = "Confusion Matrix") -> None:
+    fig, ax = plt.subplots(figsize=(6, 5))
+    image = ax.imshow(matrix.to_numpy(), cmap="Blues")
+    fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+
+    ax.set_title(title)
+    ax.set_xlabel("Predicted label")
+    ax.set_ylabel("True label")
+    ax.set_xticks(np.arange(len(matrix.columns)), labels=matrix.columns)
+    ax.set_yticks(np.arange(len(matrix.index)), labels=matrix.index)
+
+    threshold = matrix.to_numpy().max() / 2 if matrix.to_numpy().size else 0
+    for row_index, row_label in enumerate(matrix.index):
+        for column_index, column_label in enumerate(matrix.columns):
+            value = int(matrix.loc[row_label, column_label])
+            color = "white" if value > threshold else "black"
+            ax.text(column_index, row_index, value, ha="center", va="center", color=color)
+
+    plt.tight_layout()
+
+
 def plot_history(history: pd.DataFrame) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     axes[0].plot(history["epoch"], history["train_loss"], marker="o", label="train")
@@ -134,6 +155,48 @@ def plot_history(history: pd.DataFrame) -> None:
 
     axes[1].plot(history["epoch"], history["validation_accuracy"], marker="o", label="accuracy")
     axes[1].set_title("Validation Accuracy")
+    axes[1].legend()
+
+    plt.tight_layout()
+
+
+def transformer_history_table(log_history: list[dict[str, Any]]) -> pd.DataFrame:
+    rows_by_epoch: dict[float, dict[str, float]] = {}
+    for event in log_history:
+        if "epoch" not in event:
+            continue
+
+        epoch = round(float(event["epoch"]), 4)
+        row = rows_by_epoch.setdefault(epoch, {"epoch": epoch})
+        if "loss" in event:
+            row["train_loss"] = float(event["loss"])
+        if "eval_loss" in event:
+            row["validation_loss"] = float(event["eval_loss"])
+        if "eval_accuracy" in event:
+            row["validation_accuracy"] = float(event["eval_accuracy"])
+        if "eval_macro_f1" in event:
+            row["validation_macro_f1"] = float(event["eval_macro_f1"])
+
+    return pd.DataFrame(rows_by_epoch.values()).sort_values("epoch").reset_index(drop=True)
+
+
+def plot_transformer_history(history: pd.DataFrame) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    if "train_loss" in history:
+        axes[0].plot(history["epoch"], history["train_loss"], marker="o", label="train")
+    if "validation_loss" in history:
+        axes[0].plot(history["epoch"], history["validation_loss"], marker="o", label="validation")
+    axes[0].set_title("Loss")
+    axes[0].set_xlabel("Epoch")
+    axes[0].legend()
+
+    if "validation_accuracy" in history:
+        axes[1].plot(history["epoch"], history["validation_accuracy"], marker="o", label="accuracy")
+    if "validation_macro_f1" in history:
+        axes[1].plot(history["epoch"], history["validation_macro_f1"], marker="o", label="macro F1")
+    axes[1].set_title("Validation Metrics")
+    axes[1].set_xlabel("Epoch")
     axes[1].legend()
 
     plt.tight_layout()
