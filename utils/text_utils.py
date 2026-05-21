@@ -5,19 +5,22 @@ import random
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
 from huggingface_hub import hf_hub_download
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, precision_recall_fscore_support
 from sklearn.utils.class_weight import compute_class_weight
-from tensorflow import keras
-from tensorflow.keras.preprocessing.sequence import pad_sequences
 
 
 LABEL_TO_ID = {"negative": 0, "neutral": 1, "positive": 2}
 ID_TO_LABEL = {value: key for key, value in LABEL_TO_ID.items()}
+
+
+def _load_keras():
+    from tensorflow import keras
+
+    return keras
 
 
 def find_project_root(start: Path | None = None) -> Path:
@@ -126,6 +129,8 @@ def metrics_table(metrics: dict[str, Any]) -> pd.DataFrame:
 
 
 def plot_confusion_matrix(matrix: pd.DataFrame, title: str = "Confusion Matrix") -> None:
+    import matplotlib.pyplot as plt
+
     fig, ax = plt.subplots(figsize=(6, 5))
     image = ax.imshow(matrix.to_numpy(), cmap="Blues")
     fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
@@ -147,6 +152,8 @@ def plot_confusion_matrix(matrix: pd.DataFrame, title: str = "Confusion Matrix")
 
 
 def plot_history(history: pd.DataFrame) -> None:
+    import matplotlib.pyplot as plt
+
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     axes[0].plot(history["epoch"], history["train_loss"], marker="o", label="train")
     axes[0].plot(history["epoch"], history["validation_loss"], marker="o", label="validation")
@@ -181,6 +188,8 @@ def transformer_history_table(log_history: list[dict[str, Any]]) -> pd.DataFrame
 
 
 def plot_transformer_history(history: pd.DataFrame) -> None:
+    import matplotlib.pyplot as plt
+
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
     if "train_loss" in history:
@@ -217,6 +226,8 @@ def keras_text_splits(
     tokenizer: Any,
     max_length: int,
 ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    from tensorflow.keras.preprocessing.sequence import pad_sequences
+
     result: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     for split_name in ["train", "validation", "test"]:
@@ -236,6 +247,7 @@ def replace_keras_classifier(
     activation: str = "softmax",
     name: str = "transfer_head",
 ) -> Any:
+    keras = _load_keras()
     inputs = keras.Input(
         shape=tuple(base_model.inputs[0].shape[1:]),
         dtype=base_model.inputs[0].dtype,
@@ -266,6 +278,7 @@ def build_training_callbacks(
     early_stopping_patience: int,
     reduce_lr_patience: int,
 ) -> list[keras.callbacks.Callback]:
+    keras = _load_keras()
     return [
         keras.callbacks.EarlyStopping(
             monitor="val_loss",
@@ -298,6 +311,7 @@ def train_keras_transfer_model(
     early_stopping_patience: int = 2,
     reduce_lr_patience: int = 1,
 ) -> pd.DataFrame:
+    keras = _load_keras()
     x_train, y_train = train_data
     x_valid, y_valid = validation_data
     class_weight = balanced_class_weights(y_train) if use_class_weight else None

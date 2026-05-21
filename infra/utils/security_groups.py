@@ -155,7 +155,10 @@ def create_security_group_stack(
     vpc_id: str,
     ec2_group_name: str,
     db_group_name: str,
+    lambda_group_name: str | None = None,
     ssh_allowed_cidr: str,
+    api_allowed_cidr: str | None = None,
+    api_port: int = 8000,
     tags: dict[str, str],
 ) -> dict[str, str]:
     session = boto3.Session(region_name=region)
@@ -177,6 +180,16 @@ def create_security_group_stack(
         cidr_ip=ssh_allowed_cidr,
         description="SSH access",
     )
+    if api_allowed_cidr:
+        ensure_ingress_cidr(
+            ec2_client,
+            group_id=ec2_group_id,
+            protocol="tcp",
+            from_port=api_port,
+            to_port=api_port,
+            cidr_ip=api_allowed_cidr,
+            description="FinBERT API access",
+        )
 
     db_group_id = ensure_security_group(
         ec2_client,
@@ -200,7 +213,27 @@ def create_security_group_stack(
         description="Glue workers and RDS access within the DB security group",
     )
 
-    return {
+    resources = {
         "ec2_security_group_id": ec2_group_id,
         "db_security_group_id": db_group_id,
     }
+    if lambda_group_name:
+        lambda_group_id = ensure_security_group(
+            ec2_client,
+            group_name=lambda_group_name,
+            description="Lambda access for FinBERT inference",
+            vpc_id=vpc_id,
+            tags=tags,
+        )
+        ensure_ingress_from_security_group(
+            ec2_client,
+            group_id=ec2_group_id,
+            protocol="tcp",
+            from_port=api_port,
+            to_port=api_port,
+            source_group_id=lambda_group_id,
+            description="FinBERT API access from Lambda",
+        )
+        resources["lambda_security_group_id"] = lambda_group_id
+
+    return resources
