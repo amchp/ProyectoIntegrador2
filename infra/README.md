@@ -1,23 +1,99 @@
 # Infra
 
-This folder contains Python scripts to create the AWS resources for the financial sentiment pipeline.
+This folder contains Python scripts that create the AWS resources for the financial sentiment pipeline.
 
-## Run order
+The scripts load `infra/.env` automatically. You do not need to run `source .env`, and you do not need to copy generated AWS IDs back into the file manually. When a script creates or discovers required infrastructure values, it updates `infra/.env` for the next script.
 
-Run commands from the `infra/` folder.
+## Initial `.env`
 
-For a fresh environment, use this order:
+Create `infra/.env` with only these values:
 
 ```bash
-# 1. Load AWS and project settings.
-set -a
-source .env
-set +a
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_SESSION_TOKEN=
+EC2_KEY_NAME=
+EC2_KEY_PATH=
+```
 
-# 2. Install local infra script dependencies.
+`EC2_KEY_NAME` is the AWS EC2 key pair name. `EC2_KEY_PATH` is the local path to the matching `.pem` file.
+
+The scripts will add generated values such as:
+
+```bash
+AWS_REGION=us-east-1
+RDS_MASTER_PASSWORD=
+VPC_ID=
+PUBLIC_SUBNET_IDS=
+PRIVATE_SUBNET_IDS=
+SSH_ALLOWED_CIDR=
+API_ALLOWED_CIDR=
+EC2_SECURITY_GROUP_ID=
+DB_SECURITY_GROUP_ID=
+LAMBDA_SECURITY_GROUP_ID=
+FINBERT_ELASTIC_IP=
+FINBERT_ELASTIC_IP_ALLOCATION_ID=
+FINBERT_INSTANCE_ID=
+FINBERT_PUBLIC_DNS=
+FINBERT_PUBLIC_IP=
+FINBERT_API_URL=
+FINBERT_SSH_USER=
+FINBERT_INSTANCE_TYPE=
+```
+
+Do not commit real credentials, generated passwords, or generated resource IDs.
+
+## Roles
+
+All AWS service roles and the EC2 instance profile use the AWS Academy role named `LabRole`.
+
+Do not add role ARN variables to `.env`. The scripts resolve `LabRole` directly for:
+
+- AWS Glue jobs
+- Step Functions
+- Lambda
+- EC2 instance profile
+
+The identity running the scripts must be allowed to pass `LabRole`.
+
+## Install dependencies
+
+Run commands from this `infra/` folder:
+
+```bash
+cd infra
 python -m pip install -r requirements.txt
+```
 
-# 3. Create base AWS infrastructure.
+## Fresh environment run order
+
+The easiest path is:
+
+```bash
+python run_all.py
+```
+
+Useful variants:
+
+```bash
+python run_all.py --dry-run
+python run_all.py --snapshot-date 2026-05-20
+python run_all.py --pipeline-timeout-seconds 1800
+python run_all.py --skip-finbert
+python run_all.py --install-deps
+python run_all.py --artifact-uri s3://proyecto-integrador-2-features-amce/models/finbert/manual/run_id=<run_id>/
+python run_all.py --force-upload
+```
+
+`run_all.py` does not continue immediately after starting the data pipeline. It waits until the final feature report exists in S3:
+
+```text
+s3://proyecto-integrador-2-features-amce/features/financial_sentiment/reports/snapshot_date=YYYY-MM-DD/split_distribution.csv
+```
+
+The expanded command order is:
+
+```bash
 python create_vpc.py
 python create_security_groups.py
 python create_raw_bucket.py
@@ -25,87 +101,44 @@ python create_features_bucket.py
 python create_rds_postgres.py
 python create_glue_connection.py
 python create_finbert_kinesis.py
-
-# 4. Deploy ETL orchestration.
 python deploy_glue_jobs.py
 python deploy_step_function.py
-
-# 5. Run the data pipeline to materialize a feature snapshot.
 python start_pipeline.py
-# Or pin the snapshot date:
-python start_pipeline.py --snapshot-date 2026-05-20
+python create_finbert_elastic_ip.py
+python create_finbert_ec2.py
+python upload_finbert_artifact.py
+python deploy_finbert_service.py --artifact-uri <artifact_uri printed by upload_finbert_artifact.py>
+python deploy_finbert_lambda_consumer.py
 ```
 
-For normal reruns after infrastructure already exists, use:
+For normal reruns after infrastructure already exists:
 
 ```bash
-set -a
-source .env
-set +a
-
 python deploy_glue_jobs.py
 python deploy_step_function.py
 python start_pipeline.py
 ```
 
-## 1. Load environment variables
-
-From this `infra/` folder:
-
-```bash
-set -a
-source .env
-set +a
-```
-
-The `.env` file should contain:
-
-```bash
-AWS_PROFILE=your-aws-profile
-AWS_REGION=us-east-1
-RDS_MASTER_PASSWORD=your-secure-password
-GLUE_SERVICE_ROLE_ARN=arn:aws:iam::<account-id>:role/service-role/AWSGlueServiceRoleFinancialSentiment
-STATE_MACHINE_ROLE_ARN=arn:aws:iam::<account-id>:role/service-role/FinancialSentimentStepFunctionsRole
-```
-
-If you are not using `AWS_PROFILE`, fill in these instead:
-
-```bash
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-AWS_SESSION_TOKEN=
-```
-
-## 2. Install dependencies
-
-From this `infra/` folder:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-## 3. Create the VPC
+## VPC
 
 ```bash
 python create_vpc.py
 ```
 
 This creates the VPC, public subnets, private subnets, route tables, and an S3 Gateway endpoint for the private subnet route table. S3 is not placed inside the VPC; the endpoint gives private subnets a private AWS route to S3.
-The script is idempotent: rerunning it reuses existing resources and updates route table associations or endpoint routes when needed.
 
-Copy the printed values:
+The script is idempotent. Rerunning it reuses existing resources and updates route table associations or endpoint routes when needed.
 
-- `VPC ready: vpc-...`
-- `Public subnets for EC2 public IPs: subnet-..., subnet-...`
-- `Private subnets for RDS: subnet-..., subnet-...`
+It writes these values to `.env`:
 
-Then update these values in `.env`:
+```bash
+AWS_REGION=
+VPC_ID=
+PUBLIC_SUBNET_IDS=
+PRIVATE_SUBNET_IDS=
+```
 
-- `VPC_ID=vpc-...`
-- `PUBLIC_SUBNET_IDS=subnet-...,subnet-...`
-- `PRIVATE_SUBNET_IDS=subnet-...,subnet-...`
-
-## 4. Create security groups
+## Security groups
 
 ```bash
 python create_security_groups.py
@@ -117,53 +150,40 @@ This creates:
 - `proyecto-postgres-sg`
 - `proyecto-finbert-lambda-sg`
 
-It also allows `proyecto-finbert-lambda-sg` to call the FinBERT API on `proyecto-integrador-ec2-sg` through port `8000/tcp`.
+If `SSH_ALLOWED_CIDR` or `API_ALLOWED_CIDR` is missing, the script detects the current public IP of the machine running the command and uses `<current-public-ip>/32`. It writes the resolved CIDRs and security group IDs to `.env`.
 
-The script uses these CIDRs from `.env` when present:
+The FinBERT API port is `8000/tcp`. The PostgreSQL security group gets a self-referencing all-traffic inbound rule because AWS Glue requires it for JDBC connections inside a VPC.
 
-```bash
-SSH_ALLOWED_CIDR=your-public-ip/32
-API_ALLOWED_CIDR=your-public-ip/32
-```
-
-If either value is missing, the script detects the current public IP of the machine running the command and uses `<current-public-ip>/32`.
-The FinBERT API port is `8000/tcp` and should be restricted to your public IP for the demo.
-The PostgreSQL security group also gets a self-referencing all-traffic inbound rule. AWS Glue requires this for JDBC connections that run inside a VPC.
-
-## 5. Create S3 buckets
+## S3 buckets
 
 ```bash
 python create_raw_bucket.py
 python create_features_bucket.py
 ```
 
-The hardcoded bucket names are:
+The bucket names are:
 
 - `proyecto-integrador-2`
 - `proyecto-integrador-2-features-amce`
 
 Run `python create_vpc.py` again if an existing VPC needs the private route table or S3 endpoint updated.
 
-## 6. Create RDS PostgreSQL
-
-Make sure `RDS_MASTER_PASSWORD` is loaded from `.env`, then run:
+## RDS PostgreSQL
 
 ```bash
 python create_rds_postgres.py
 ```
 
-This creates the database:
+This creates:
 
 - Instance: `proyecto-postgres`
 - Database: `proyectodb`
 - Username: `postgres`
 - Port: `5432`
 
-The script waits until the RDS instance is available and prints the endpoint.
+If `RDS_MASTER_PASSWORD` is missing, the script generates a password and writes it to `.env`. The script waits until the RDS instance is available and prints the endpoint.
 
-## 7. Create the Glue connection
-
-Before deploying Glue jobs, create the AWS Glue connection:
+## Glue connection
 
 ```bash
 python create_glue_connection.py
@@ -175,11 +195,9 @@ This creates or updates:
 Proyecto Financial Sentiment RDS connection
 ```
 
-The script points it to the RDS PostgreSQL instance and uses the first subnet from `PRIVATE_SUBNET_IDS` plus the `proyecto-postgres-sg` security group.
+The script uses the RDS password generated by `create_rds_postgres.py`, the first private subnet from `PRIVATE_SUBNET_IDS`, and the `proyecto-postgres-sg` security group.
 
-## 8. Deploy Glue jobs
-
-Before running this, make sure `GLUE_SERVICE_ROLE_ARN` in `.env` is a real IAM role ARN in your AWS account. The identity running this command also needs `iam:PassRole` permission for that role.
+## Glue jobs
 
 ```bash
 python deploy_glue_jobs.py
@@ -191,14 +209,11 @@ This deploys:
 - `glue_financial_sentiment_curated`
 - `glue_financial_sentiment_features`
 
-The raw job is configured with `MaxConcurrentRuns = 1` because the Step Function runs raw dataset jobs sequentially.
-Glue job Python dependencies are read from `glue/requirements_raw.txt`, `glue/requirements_curated.txt`, and `glue/requirements_features.txt`.
+The raw job is configured with `MaxConcurrentRuns = 1` because the Step Function runs raw dataset jobs sequentially. Glue job dependencies are read from `glue/requirements_raw.txt`, `glue/requirements_curated.txt`, and `glue/requirements_features.txt`.
+
 Curated and features run in private VPC subnets, so their requirement files are intentionally empty unless you add NAT or a private package index. S3 Gateway endpoints do not provide internet access to PyPI.
-The Glue common bundle includes `glue/common/pandas_compat.py` so pandas 2.x works with Glue/Spark code paths that still expect `DataFrame.iteritems`.
 
-## 9. Deploy the Step Functions state machine
-
-Before running this, make sure `STATE_MACHINE_ROLE_ARN` in `.env` is a real IAM role ARN in your AWS account. The identity running this command also needs `iam:PassRole` permission for that role.
+## Step Functions
 
 ```bash
 python deploy_step_function.py
@@ -216,16 +231,7 @@ The state machine flow is:
 Raw datasets -> Curated Postgres -> Daily Feature Snapshot
 ```
 
-The features job writes only the requested daily snapshot partition:
-
-```text
-s3://proyecto-integrador-2-features-amce/features/financial_sentiment/model_features/snapshot_date=YYYY-MM-DD/
-s3://proyecto-integrador-2-features-amce/features/financial_sentiment/reports/snapshot_date=YYYY-MM-DD/
-```
-
-Rerunning the features job for the same `snapshot_date` deletes and replaces only that partition.
-
-## 10. Start the snapshot pipeline
+## Start the snapshot pipeline
 
 ```bash
 python start_pipeline.py
@@ -241,63 +247,37 @@ The start script sends explicit Step Functions input:
 }
 ```
 
-The Step Function stops after the snapshot parquet partition is written.
+The features job writes only the requested daily snapshot partition under:
 
-## 11. Deploy FinBERT on EC2
-
-This demo path deploys the FinBERT sentiment model as a FastAPI service on one EC2 instance. The lab-friendly default is `t3.micro`; set `FINBERT_INSTANCE_TYPE=g4dn.xlarge` only when GPU EC2 is allowed.
-
-Add these values to `.env`:
-
-```bash
-EC2_KEY_NAME=your-aws-key-pair-name
-EC2_KEY_PATH=/local/path/to/your-key.pem
-SSH_ALLOWED_CIDR=your-public-ip/32
-API_ALLOWED_CIDR=your-public-ip/32
-PUBLIC_SUBNET_IDS=subnet-...,subnet-...
-
-FINBERT_INSTANCE_TYPE=t3.micro
-
-FINBERT_INSTANCE_PROFILE_NAME=LabRole
+```text
+s3://proyecto-integrador-2-features-amce/features/financial_sentiment/model_features/snapshot_date=YYYY-MM-DD/
+s3://proyecto-integrador-2-features-amce/features/financial_sentiment/reports/snapshot_date=YYYY-MM-DD/
 ```
 
-`PUBLIC_SUBNET_IDS` is printed by `python create_vpc.py`. If it is missing, `create_finbert_ec2.py` tries to discover a public subnet in `VPC_ID` automatically.
-`SSH_ALLOWED_CIDR` and `API_ALLOWED_CIDR` are your client IP ranges, not the EC2 Elastic IP. The Elastic IP can be allocated before EC2 exists; `create_finbert_ec2.py` associates it after the instance is running.
+Rerunning the features job for the same `snapshot_date` deletes and replaces only that partition.
+
+## FinBERT on EC2
+
+This demo path deploys the FinBERT sentiment model as a FastAPI service on one EC2 instance. The default instance type is `t3.micro`. Set `FINBERT_INSTANCE_TYPE=g4dn.xlarge` in `.env` only when GPU EC2 is allowed.
 
 Allocate the stable Elastic IP, create or update security groups, then launch or start EC2:
 
 ```bash
-cd infra
-set -a
-source .env
-set +a
-
 python create_finbert_elastic_ip.py
 python create_security_groups.py
 python create_finbert_ec2.py
 ```
 
+These scripts write the Elastic IP, instance ID, public IP, API URL, SSH user, and instance type to `.env`.
+
 Deploy the API from your local machine. By default, this uploads `artifacts/finbert/checkpoint-9700` to S3 under `models/finbert/manual/run_id=.../`, has EC2 download that S3 artifact with `aws s3 sync`, installs dependencies, starts `finbert-api.service`, and verifies `/health`:
 
 ```bash
-cd infra
-set -a
-source .env
-set +a
-
 python upload_finbert_artifact.py
 python deploy_finbert_service.py --artifact-uri <artifact_uri printed by upload_finbert_artifact.py>
 ```
 
-`deploy_finbert_service.py` bootstraps the EC2 service environment with `uv` and Python `3.13.13`, matching the FinBERT notebook kernel. To force another runtime:
-
-```bash
-python deploy_finbert_service.py \
-  --python-version 3.11 \
-  --artifact-uri <artifact_uri printed by upload_finbert_artifact.py>
-```
-
-The S3 download on EC2 uses the instance profile credentials automatically; no AWS keys are copied to the machine.
+`upload_finbert_artifact.py` writes the uploaded URI to `.env` as `FINBERT_ARTIFACT_URI`. On later runs, the upload script checks that the expected model files already exist at that S3 URI and skips uploading when the artifact is complete. Use `python run_all.py --force-upload` when you want a fresh upload, or pass `--artifact-uri s3://...` to deploy a specific artifact.
 
 To deploy a different local trained checkpoint:
 
@@ -308,10 +288,9 @@ python upload_finbert_artifact.py \
 python deploy_finbert_service.py --artifact-uri <artifact_uri printed by upload_finbert_artifact.py>
 ```
 
-To deploy an artifact that already exists in S3, pass `--artifact-uri`:
+To deploy an artifact that already exists in S3:
 
 ```bash
-cd infra
 python deploy_finbert_service.py \
   --artifact-uri s3://proyecto-integrador-2-features-amce/models/finbert/snapshot_date=2026-05-20/run_id=<run_id>/
 ```
@@ -326,19 +305,13 @@ curl -X POST http://<ec2-public-ip>:8000/predict \
   -d '{"text":"Apple shares rose after earnings beat expectations."}'
 ```
 
-If you associated an Elastic IP, use that IP for the API URL:
-
-```bash
-curl http://<elastic-ip>:8000/health
-```
-
-Stop the GPU instance after the demo:
+Stop the instance after the demo:
 
 ```bash
 python stop_finbert_ec2.py
 ```
 
-## 12. Deploy Kinesis-triggered FinBERT inference
+## Kinesis-triggered FinBERT inference
 
 This path adds asynchronous inference without replacing the HTTP API:
 
@@ -349,11 +322,6 @@ local machine -> Kinesis -> Lambda -> EC2 HTTP API -> S3
 Create the Kinesis stream and make sure the Lambda security group rule exists:
 
 ```bash
-cd infra
-set -a
-source .env
-set +a
-
 python create_finbert_kinesis.py
 python create_security_groups.py
 ```
@@ -373,7 +341,7 @@ python send_finbert_kinesis_request.py \
   --text "Apple shares rose after earnings beat expectations."
 ```
 
-The script prints the `request_id`, Kinesis sequence number, and expected S3 result URI. Results are written under:
+Results are written under:
 
 ```text
 s3://proyecto-integrador-2-features-amce/inference/finbert/results/date=YYYY-MM-DD/<request_id>.json
@@ -383,43 +351,29 @@ The Lambda writes either `status: "success"` with the model prediction or `statu
 
 ## IAM notes
 
-The identity running `deploy_step_function.py` needs `iam:PassRole` for `STATE_MACHINE_ROLE_ARN`.
-The Step Functions role itself needs permission to start and monitor the three Glue jobs.
-The identity running `create_finbert_ec2.py` needs EC2 permissions and, unless `FINBERT_INSTANCE_PROFILE_NAME` points to an existing profile, IAM permissions to create/update `proyecto-finbert-ec2-role` and `proyecto-finbert-ec2-profile`.
-If the AWS account denies `iam:CreateRole`, use a pre-created EC2 instance profile instead. The script automatically tries `LabRole` and `LabInstanceProfile`; you can also set one explicitly:
+The identity running these scripts needs permission to create the requested AWS resources and `iam:PassRole` for `LabRole`.
 
-```bash
-FINBERT_INSTANCE_PROFILE_NAME=LabRole
-```
+`LabRole` must allow:
 
-The profile must allow the EC2 instance to read:
+- Glue jobs to run and access the deploy/data buckets.
+- Step Functions to start and monitor the Glue jobs.
+- Lambda to consume Kinesis, call the FinBERT API in the VPC, and write results to S3.
+- EC2 to read model artifacts from S3 and write any required outputs.
 
-```text
-s3://proyecto-integrador-2-features-amce/features/financial_sentiment/model_features/*
-```
+## Troubleshooting expired AWS Academy credentials
 
-and read/write:
-
-```text
-s3://proyecto-integrador-2-features-amce/models/finbert/*
-```
-
-## Troubleshooting
-
-If an EC2 command fails with an explicit deny like this:
+If a command fails with an explicit deny like this:
 
 ```text
 UnauthorizedOperation ... is not authorized to perform: ec2:DescribeVpcs with an explicit deny in an identity-based policy: ...:policy/voc-cancel-cred
 ```
 
-The active AWS credentials are blocked by the lab/account policy. This is not caused by the repo scripts and cannot be fixed by adding permissions in code. In AWS Academy/Vocareum-style labs, restart or renew the lab session, download/copy fresh credentials, update `infra/.env`, then reload them:
+The active AWS credentials are blocked by the lab/account policy. In AWS Academy/Vocareum-style labs, restart or renew the lab session, then replace only these values in `infra/.env`:
 
 ```bash
-cd infra
-set -a
-source .env
-set +a
-aws sts get-caller-identity
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_SESSION_TOKEN=
 ```
 
-After the caller identity shows the fresh session, rerun the infra command.
+After updating those three values, rerun the failed command. No shell reload is required because every script reads `.env` directly.

@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-import boto3
 from botocore.exceptions import ClientError
-from utils.common import require_env, resolve_region
+from utils.aws import aws_client, lab_role_arn
+from utils.common import load_json_document, persist_env_values, resolve_region
+from utils.stepfunctions import ensure_state_machine
 
 
 AWS_REGION = "us-east-1"
@@ -20,20 +20,6 @@ DEFINITION_PATH = (
     / "glue_financial_sentiment_raw_curated_features.json"
 )
 
-def load_definition(path: Path) -> str:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    return json.dumps(payload)
-
-
-def get_state_machine_arn(stepfunctions_client, name: str) -> str | None:
-    paginator = stepfunctions_client.get_paginator("list_state_machines")
-    for page in paginator.paginate():
-        for state_machine in page["stateMachines"]:
-            if state_machine["name"] == name:
-                return state_machine["stateMachineArn"]
-    return None
-
-
 def deploy_state_machine(
     *,
     region: str,
@@ -41,40 +27,34 @@ def deploy_state_machine(
     role_arn: str,
     definition_path: Path,
     state_machine_type: str,
-) -> None:
-    stepfunctions_client = boto3.client("stepfunctions", region_name=region)
-    definition = load_definition(definition_path)
-    existing_arn = get_state_machine_arn(stepfunctions_client, state_machine_name)
-
-    if existing_arn:
-        stepfunctions_client.update_state_machine(
-            stateMachineArn=existing_arn,
-            definition=definition,
-            roleArn=role_arn,
-        )
-        print(f"Updated Step Function: {existing_arn}")
-        return
-
-    response = stepfunctions_client.create_state_machine(
-        name=state_machine_name,
+) -> str:
+    stepfunctions_client = aws_client("stepfunctions", region=region)
+    definition = load_json_document(definition_path)
+    return ensure_state_machine(
+        stepfunctions_client,
+        state_machine_name=state_machine_name,
+        role_arn=role_arn,
         definition=definition,
-        roleArn=role_arn,
-        type=state_machine_type,
+        state_machine_type=state_machine_type,
     )
-    print(f"Created Step Function: {response['stateMachineArn']}")
 
 
 if __name__ == "__main__":
     try:
-        deploy_state_machine(
-            region=resolve_region(AWS_REGION),
+        region = resolve_region(AWS_REGION)
+        iam_client = aws_client("iam", region=region)
+        state_machine_arn = deploy_state_machine(
+            region=region,
             state_machine_name=STATE_MACHINE_NAME,
-            role_arn=require_env(
-                "STATE_MACHINE_ROLE_ARN",
-                placeholder_prefixes=("arn:aws:iam::123456789012:",),
-            ),
+            role_arn=lab_role_arn(iam_client),
             definition_path=DEFINITION_PATH,
             state_machine_type=STATE_MACHINE_TYPE,
+        )
+        persist_env_values(
+            {
+                "AWS_REGION": region,
+                "STATE_MACHINE_ARN": state_machine_arn,
+            }
         )
     except ClientError as error:
         raise SystemExit(f"AWS error: {error}")

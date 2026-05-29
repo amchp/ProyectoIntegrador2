@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from urllib.request import urlopen
 
-from utils.common import load_local_env, require_env, resolve_region
+from utils.common import load_local_env, persist_env_values, require_env, resolve_region
 from utils.security_groups import create_security_group_stack
 
 AWS_REGION = "us-east-1"
@@ -37,25 +37,45 @@ def current_public_ip_cidr() -> str:
 
 def resolve_allowed_cidr(name: str) -> str:
     configured = optional_env(name)
+    detected = current_public_ip_cidr()
+    if configured and configured != detected:
+        print(f"{name} was {configured}. Updating to current public IP: {detected}")
+        return detected
     if configured:
         return configured
-    detected = current_public_ip_cidr()
     print(f"{name} is not set. Using current public IP: {detected}")
     return detected
 
 
-if __name__ == "__main__":
+def main() -> None:
+    region = resolve_region(AWS_REGION)
+    ssh_allowed_cidr = resolve_allowed_cidr("SSH_ALLOWED_CIDR")
+    api_allowed_cidr = resolve_allowed_cidr("API_ALLOWED_CIDR")
     resources = create_security_group_stack(
-        region=resolve_region(AWS_REGION),
+        region=region,
         vpc_id=require_env("VPC_ID", placeholder_prefixes=("vpc-xxxxxxxx",)),
         ec2_group_name=EC2_SECURITY_GROUP_NAME,
         db_group_name=DB_SECURITY_GROUP_NAME,
         lambda_group_name=LAMBDA_SECURITY_GROUP_NAME,
-        ssh_allowed_cidr=resolve_allowed_cidr("SSH_ALLOWED_CIDR"),
-        api_allowed_cidr=resolve_allowed_cidr("API_ALLOWED_CIDR"),
+        ssh_allowed_cidr=ssh_allowed_cidr,
+        api_allowed_cidr=api_allowed_cidr,
         api_port=API_PORT,
         tags=SECURITY_GROUP_TAGS,
+    )
+    persist_env_values(
+        {
+            "AWS_REGION": region,
+            "SSH_ALLOWED_CIDR": ssh_allowed_cidr,
+            "API_ALLOWED_CIDR": api_allowed_cidr,
+            "EC2_SECURITY_GROUP_ID": resources["ec2_security_group_id"],
+            "DB_SECURITY_GROUP_ID": resources["db_security_group_id"],
+            "LAMBDA_SECURITY_GROUP_ID": resources["lambda_security_group_id"],
+        }
     )
     print(f"EC2 security group ready: {resources['ec2_security_group_id']}")
     print(f"Postgres security group ready: {resources['db_security_group_id']}")
     print(f"Lambda security group ready: {resources['lambda_security_group_id']}")
+
+
+if __name__ == "__main__":
+    main()

@@ -8,6 +8,7 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from utils.aws import aws_client
 from utils.common import resolve_region
 
 AWS_REGION = "us-east-1"
@@ -52,11 +53,9 @@ def send_request(kinesis_client, *, stream_name: str, request: dict[str, str]) -
 
 
 def main() -> int:
-    import boto3
-
     args = parse_args()
     request = build_request(text=args.text, request_id=args.request_id)
-    kinesis_client = boto3.Session(region_name=resolve_region(AWS_REGION)).client("kinesis")
+    kinesis_client = aws_client("kinesis", region=resolve_region(AWS_REGION))
     response = send_request(kinesis_client, stream_name=args.stream_name, request=request)
 
     print(f"request_id={request['request_id']}")

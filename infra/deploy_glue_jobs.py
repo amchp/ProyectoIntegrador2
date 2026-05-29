@@ -7,9 +7,10 @@ import io
 import zipfile
 from pathlib import Path
 
-import boto3
 from botocore.exceptions import ClientError
-from utils.common import require_env, resolve_region
+from utils.aws import aws_clients, lab_role_arn
+from utils.common import resolve_region
+from utils.glue import base_default_arguments, create_or_update_job, job_definition, s3_uri
 
 
 AWS_REGION = "us-east-1"
@@ -37,10 +38,6 @@ FEATURES_SCRIPT_PATH = GLUE_DIR / "features" / "features_glue_adapter.py"
 RAW_REQUIREMENTS_PATH = GLUE_DIR / "requirements_raw.txt"
 CURATED_REQUIREMENTS_PATH = GLUE_DIR / "requirements_curated.txt"
 FEATURES_REQUIREMENTS_PATH = GLUE_DIR / "requirements_features.txt"
-
-
-def s3_uri(bucket: str, key: str) -> str:
-    return f"s3://{bucket}/{key}"
 
 
 def load_requirements(path: Path) -> str:
@@ -80,86 +77,10 @@ def upload_common_zip(s3_client, *, bucket: str, key: str, common_dir: Path) -> 
     return uri
 
 
-def glue_job_exists(glue_client, job_name: str) -> bool:
-    try:
-        glue_client.get_job(JobName=job_name)
-        return True
-    except ClientError as error:
-        if error.response["Error"]["Code"] == "EntityNotFoundException":
-            return False
-        raise
-
-
-def base_default_arguments(
-    *,
-    deploy_bucket: str,
-    deploy_prefix: str,
-    additional_python_modules: str,
-    extra_py_files_uri: str,
-) -> dict[str, str]:
-    arguments = {
-        "--job-language": "python",
-        "--enable-metrics": "true",
-        "--enable-continuous-cloudwatch-log": "true",
-        "--TempDir": s3_uri(deploy_bucket, f"{deploy_prefix}/temp/"),
-        "--extra-py-files": extra_py_files_uri,
-    }
-    if additional_python_modules:
-        arguments["--additional-python-modules"] = additional_python_modules
-    return arguments
-
-
-def job_definition(
-    *,
-    role_arn: str,
-    script_location: str,
-    default_arguments: dict[str, str],
-    connections: list[str],
-    max_concurrent_runs: int = DEFAULT_MAX_CONCURRENT_RUNS,
-) -> dict:
-    definition = {
-        "Role": role_arn,
-        "ExecutionProperty": {"MaxConcurrentRuns": max_concurrent_runs},
-        "Command": {
-            "Name": "glueetl",
-            "ScriptLocation": script_location,
-            "PythonVersion": "3",
-        },
-        "DefaultArguments": default_arguments,
-        "GlueVersion": GLUE_VERSION,
-        "WorkerType": WORKER_TYPE,
-        "NumberOfWorkers": NUMBER_OF_WORKERS,
-        "Timeout": TIMEOUT_MINUTES,
-        "MaxRetries": MAX_RETRIES,
-    }
-    if connections:
-        definition["Connections"] = {"Connections": connections}
-    return definition
-
-
-def create_or_update_job(
-    glue_client,
-    *,
-    job_name: str,
-    definition: dict,
-) -> None:
-    if glue_job_exists(glue_client, job_name):
-        glue_client.update_job(JobName=job_name, JobUpdate=definition)
-        print(f"Updated Glue job: {job_name}")
-        return
-
-    glue_client.create_job(Name=job_name, **definition)
-    print(f"Created Glue job: {job_name}")
-
-
-def deploy_glue_jobs() -> None:
+def main() -> None:
     region = resolve_region(AWS_REGION)
-    glue_service_role_arn = require_env(
-        "GLUE_SERVICE_ROLE_ARN",
-        placeholder_prefixes=("arn:aws:iam::123456789012:",),
-    )
-    s3_client = boto3.client("s3", region_name=region)
-    glue_client = boto3.client("glue", region_name=region)
+    s3_client, glue_client, iam_client = aws_clients(region, "s3", "glue", "iam")
+    role_arn = lab_role_arn(iam_client)
 
     common_zip_uri = upload_common_zip(
         s3_client,
@@ -190,7 +111,7 @@ def deploy_glue_jobs() -> None:
         glue_client,
         job_name=RAW_JOB_NAME,
         definition=job_definition(
-            role_arn=glue_service_role_arn,
+            role_arn=role_arn,
             script_location=raw_script_uri,
             default_arguments=base_default_arguments(
                 deploy_bucket=DEPLOY_BUCKET,
@@ -199,6 +120,11 @@ def deploy_glue_jobs() -> None:
                 extra_py_files_uri=common_zip_uri,
             ),
             connections=RAW_CONNECTIONS,
+            glue_version=GLUE_VERSION,
+            worker_type=WORKER_TYPE,
+            number_of_workers=NUMBER_OF_WORKERS,
+            timeout_minutes=TIMEOUT_MINUTES,
+            max_retries=MAX_RETRIES,
             max_concurrent_runs=RAW_MAX_CONCURRENT_RUNS,
         ),
     )
@@ -206,7 +132,7 @@ def deploy_glue_jobs() -> None:
         glue_client,
         job_name=CURATED_JOB_NAME,
         definition=job_definition(
-            role_arn=glue_service_role_arn,
+            role_arn=role_arn,
             script_location=curated_script_uri,
             default_arguments=base_default_arguments(
                 deploy_bucket=DEPLOY_BUCKET,
@@ -215,13 +141,19 @@ def deploy_glue_jobs() -> None:
                 extra_py_files_uri=common_zip_uri,
             ),
             connections=CURATED_CONNECTIONS,
+            glue_version=GLUE_VERSION,
+            worker_type=WORKER_TYPE,
+            number_of_workers=NUMBER_OF_WORKERS,
+            timeout_minutes=TIMEOUT_MINUTES,
+            max_retries=MAX_RETRIES,
+            max_concurrent_runs=DEFAULT_MAX_CONCURRENT_RUNS,
         ),
     )
     create_or_update_job(
         glue_client,
         job_name=FEATURES_JOB_NAME,
         definition=job_definition(
-            role_arn=glue_service_role_arn,
+            role_arn=role_arn,
             script_location=features_script_uri,
             default_arguments=base_default_arguments(
                 deploy_bucket=DEPLOY_BUCKET,
@@ -230,12 +162,18 @@ def deploy_glue_jobs() -> None:
                 extra_py_files_uri=common_zip_uri,
             ),
             connections=FEATURES_CONNECTIONS,
+            glue_version=GLUE_VERSION,
+            worker_type=WORKER_TYPE,
+            number_of_workers=NUMBER_OF_WORKERS,
+            timeout_minutes=TIMEOUT_MINUTES,
+            max_retries=MAX_RETRIES,
+            max_concurrent_runs=DEFAULT_MAX_CONCURRENT_RUNS,
         ),
     )
 
 
 if __name__ == "__main__":
     try:
-        deploy_glue_jobs()
+        main()
     except ClientError as error:
         raise SystemExit(f"AWS error: {error}")

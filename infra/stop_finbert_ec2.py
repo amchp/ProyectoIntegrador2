@@ -3,29 +3,23 @@
 
 from __future__ import annotations
 
-import boto3
-
+from utils.aws import aws_client
 from utils.common import resolve_region
+from utils.ec2 import find_instance_by_name
 
 AWS_REGION = "us-east-1"
 INSTANCE_NAME = "proyecto-finbert-ec2"
 
 
 if __name__ == "__main__":
-    ec2_client = boto3.Session(region_name=resolve_region(AWS_REGION)).client("ec2")
-    reservations = ec2_client.describe_instances(
-        Filters=[
-            {"Name": "tag:Name", "Values": [INSTANCE_NAME]},
-            {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]},
-        ]
-    )["Reservations"]
-    instances = [instance for reservation in reservations for instance in reservation["Instances"]]
-    if not instances:
+    ec2_client = aws_client("ec2", region=resolve_region(AWS_REGION))
+    instance = find_instance_by_name(ec2_client, name=INSTANCE_NAME)
+    if not instance:
         print(f"No FinBERT EC2 instance found with Name={INSTANCE_NAME}.")
         raise SystemExit(0)
 
-    instance_id = instances[0]["InstanceId"]
-    state = instances[0]["State"]["Name"]
+    instance_id = instance["InstanceId"]
+    state = instance["State"]["Name"]
     if state == "stopped":
         print(f"FinBERT EC2 instance is already stopped: {instance_id}")
         raise SystemExit(0)
